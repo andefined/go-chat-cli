@@ -1,0 +1,21 @@
+// chat.proto
+syntax = "proto3";
+
+package chat.service;
+
+// Chat Service Interface
+service Chat {
+    // Stream Messages Endpoint
+    rpc Stream(stream Message) returns (stream Message) {};
+}
+
+// Author (Nested) Model
+message Author {
+    string name     = 1;
+}
+
+// Message Model
+message Message {
+    Author author   = 1;
+    string body     = 2;
+}
