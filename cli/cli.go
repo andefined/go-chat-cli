@@ -11,14 +11,10 @@ import (
 
 	pb "github.com/andefined/go-chat-cli/service"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 )
 
 var (
-	tls                = flag.Bool("tls", false, "Use TLS")
-	caFile             = flag.String("ca_file", "", "Path to CA File")
-	serverAddr         = flag.String("server_addr", "127.0.0.1:50051", "Server Address (host:port)")
-	serverHostOverride = flag.String("server_host_override", "localhost.dev", "Server Name returned by TLS handshake")
+	serverAddr = flag.String("server_addr", "127.0.0.1:50051", "Server Address (host:port)")
 )
 
 // Out Sends Messages to the Streaming Service
@@ -49,18 +45,7 @@ func main() {
 	// Create the gRPC Service
 	// Parse Server Options
 	var opts []grpc.DialOption
-	if *tls {
-		if *caFile == "" {
-			*caFile = ""
-		}
-		creds, err := credentials.NewClientTLSFromFile(*caFile, *serverHostOverride)
-		if err != nil {
-			log.Fatalf("Failed to Create TLS Credentials %v", err)
-		}
-		opts = append(opts, grpc.WithTransportCredentials(creds))
-	} else {
-		opts = append(opts, grpc.WithInsecure())
-	}
+	opts = append(opts, grpc.WithInsecure())
 
 	// Connect to Server
 	conn, err := grpc.Dial(*serverAddr, opts...)

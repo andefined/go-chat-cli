@@ -13,15 +13,11 @@ import (
 
 	pb "github.com/andefined/go-chat-cli/service"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 )
 
 var (
-	tls      = flag.Bool("tls", false, "Use TLS")
-	certFile = flag.String("cert_file", "", "Path to Cert File")
-	keyFile  = flag.String("key_file", "", "Path to Key File")
-	port     = flag.Int("port", 50051, "Port to Listen")
+	port = flag.Int("port", 50051, "Port to Listen")
 )
 
 // ChatHandler ...
@@ -97,10 +93,10 @@ func main() {
 		log.Fatalf("Failed to Listen: %v", err)
 	}
 	// Non-Blocking Kill Channel
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT, syscall.SIGKILL, syscall.SIGHUP, syscall.SIGQUIT)
+	errChanTCP := make(chan os.Signal, 10)
+	signal.Notify(errChanTCP, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		s := <-ch
+		s := <-errChanTCP
 		if i, ok := s.(syscall.Signal); ok {
 			os.Exit(int(i))
 		} else {
@@ -110,25 +106,12 @@ func main() {
 	// Create the gRPC Service
 	// Parse Server Options
 	var opts []grpc.ServerOption
-	if *tls {
-		if *certFile == "" {
-			*certFile = ""
-		}
-		if *keyFile == "" {
-			*keyFile = ""
-		}
-		creds, err := credentials.NewServerTLSFromFile(*certFile, *keyFile)
-		if err != nil {
-			log.Fatalf("Failed to Generate Credentials: %v", err)
-		}
-		opts = []grpc.ServerOption{grpc.Creds(creds)}
-	}
 	svc := grpc.NewServer(opts...)
 	// Register Service Handlers
 	pb.RegisterChatServer(svc, &ChatHandler{
 		cachedUsers: make(map[string]chan pb.Message),
 	})
-
+	log.Printf("Starting gRPC Server on: :%v", *port)
 	// Register reflection service on gRPC server.
 	//
 	// gRPC Server Reflection provides information about publicly-accessible
@@ -140,8 +123,24 @@ func main() {
 	// https://github.com/grpc/grpc-go/blob/master/Documentation/server-reflection-tutorial.md
 	reflection.Register(svc)
 	// Serve gRPC Service with Error
-	log.Printf("Listening Serice on: %v", *port)
-	if err := svc.Serve(listen); err != nil {
-		log.Fatalf("Failed to Serve: %v", err)
+	errChanSVC := make(chan error, 10)
+
+	go func() {
+		errChanSVC <- svc.Serve(listen)
+	}()
+
+	signalChan := make(chan os.Signal, 1)
+	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+
+	for {
+		select {
+		case err := <-errChanSVC:
+			if err != nil {
+				log.Fatal(err)
+			}
+		case s := <-signalChan:
+			log.Println(fmt.Sprintf("Captured message %v. Exiting...", s))
+			os.Exit(0)
+		}
 	}
 }
