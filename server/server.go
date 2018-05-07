@@ -23,7 +23,9 @@ var (
 // ChatHandler ...
 type ChatHandler struct {
 	cachedUsers map[string]chan pb.Message
-	mu          sync.Mutex
+	// A Mutex is a mutual exclusion lock.
+	// The zero value for a Mutex is an unlocked mutex.
+	mu sync.Mutex
 }
 
 // Listen ...
@@ -31,7 +33,8 @@ func (p *ChatHandler) Listen(stream pb.Chat_StreamServer, ch chan<- pb.Message) 
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
-			break
+			close(ch)
+			return
 		}
 		if err != nil {
 			return
@@ -42,8 +45,13 @@ func (p *ChatHandler) Listen(stream pb.Chat_StreamServer, ch chan<- pb.Message) 
 
 // Filter ...
 func (p *ChatHandler) Filter(author string, m pb.Message) {
+	//Lock locks m. If the lock is already in use, the calling goroutine
+	// blocks until the mutex is available.
 	p.mu.Lock()
+	// Unlock unlocks m. It is a run-time error if m is not locked
+	// on entry to Unlock.
 	defer p.mu.Unlock()
+
 	for receiver, q := range p.cachedUsers {
 		if author != receiver {
 			q <- m
@@ -93,10 +101,10 @@ func main() {
 		log.Fatalf("Failed to Listen: %v", err)
 	}
 	// Non-Blocking Kill Channel
-	errChanTCP := make(chan os.Signal, 10)
-	signal.Notify(errChanTCP, syscall.SIGINT, syscall.SIGTERM)
+	signalChanTCP := make(chan os.Signal, 10)
+	signal.Notify(signalChanTCP, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		s := <-errChanTCP
+		s := <-signalChanTCP
 		if i, ok := s.(syscall.Signal); ok {
 			os.Exit(int(i))
 		} else {
@@ -129,8 +137,8 @@ func main() {
 		errChanSVC <- svc.Serve(listen)
 	}()
 
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+	signalChanSVC := make(chan os.Signal, 1)
+	signal.Notify(signalChanSVC, syscall.SIGINT, syscall.SIGTERM)
 
 	for {
 		select {
@@ -138,7 +146,7 @@ func main() {
 			if err != nil {
 				log.Fatal(err)
 			}
-		case s := <-signalChan:
+		case s := <-signalChanSVC:
 			log.Println(fmt.Sprintf("Captured message %v. Exiting...", s))
 			os.Exit(0)
 		}

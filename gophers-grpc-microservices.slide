@@ -1,0 +1,319 @@
+gRPC Microservices
+A Simple Chat CLI
+
+Dimitris Papaevagelou
+Information Researcher / Software Engineer
+
+miir.gr, plagiari.sm
+
+dimitris.papaevagelou@andefined.com
+PGP: 0xE743EC70
+
+@andefined
+
+* Microservices
+
+- Monolith: Not a Monolith or Separated Monoliths
+- Isolated: Focus on a feature, independent codebase
+- Scalable: Easier to deploy, fewer requirements
+- Development: Small teams working in parallel
+
+* gRPC
+
+- High performance, RPC framework
+- Bi-Directional Streaming over HTTP/2
+- Pluggable
+- Client/Stub Auto Generated
+- Supports: C++, Java, Python, Go, Ruby, C#, Node.js, Android, Objective-C, PHP, Dart
+
+* gRPC Chat CLI
+
+Repo
+
+    git clone https://github.com/andefined/go-chat-cli.git
+
+Dependencies
+
+    // Install gRPC
+    go get -u google.golang.org/grpc
+    // Install protoc compiler
+    go get -u github.com/golang/protobuf/protoc-gen-go
+
+
+server.go + cli.go + chat.proto
+
+* protobuf & Interface Definition Language (IDL)
+
+    // filename.proto
+    syntax = "proto3"; "proto2"
+    package service.name;
+    service MyService {
+        rpc MyMethod(InputObject) return (OutputObject) {};
+    }
+    message InputObject {
+        uint64 id = 1;
+    }
+    message OutputObject {
+        int32 code = 1;
+        repeated map<K,V> body = 2;
+        string message = 3;
+    }
+
+- Values: double, float, int32/64, uint32/64, sint32/64, fixed32/64, sfixed32/64, bool, string, bytes
+- JSON Mapping: message, enum, map<k,v>, repeated, bool, string, bytes, int32, fixed32, uint32, int64, fixed64, uint64, float, double, Any ...
+* Bi-Directional Streaming
+
+    // chat.proto
+    syntax = "proto3";
+    package chat.service;
+    service Chat {
+        rpc Stream(stream Message) returns (stream Message) {};
+    }
+    // Author Model
+    message Author {
+        string name = 1;
+    }
+    // Message Model
+    message Message {
+        Author author   = 1;
+        string body     = 2;
+    }
+
+* Generate gRPC Client/Server Code
+
+    // -IPATH, --proto_path=PATH directory in which to search for imports
+    // --go_out tells protoc to use protoc-gen-go with `--plugins=grpc` flag
+    // service/chat.proto path to protobuf
+    protoc -I. --go_out=plugins=grpc:. service/chat.proto
+
+- Output service/chat.pb.go
+
+    python -m grpc_tools.protoc -I./service --python_out=. --grpc_python_out=. ./service/chat.proto
+
+
+* server.go (pt.1) - Implement ChatHandler struct
+
+    // ChatHandler Implements ChatServer
+    type ChatHandler struct {
+        ...
+    }
+    // Stream Handles Streaming Messages
+    func (p *ChatHandler) Stream(stream pb.Chat_StreamServer) error {
+        ...
+    }
+    // Extended Methods
+    // Filter Users
+    func (p *ChatHandler) Filter(author string, m pb.Message) {
+        ...
+    }
+    // Listen the Stream (Receives Messages)
+    func (p *ChatHandler) Listen(stream pb.Chat_StreamServer, ch chan<- pb.Message) {
+        ...
+    }
+
+* server.go (pt.2) - Create a Listening Server
+
+    // Create a Server
+    listen, err := net.Listen("tcp", fmt.Sprintf(":%d", *port))
+    if err != nil {
+        log.Fatalf("Failed to Listen: %v", err)
+    }
+    // Non-Blocking Kill Channel
+    signalChanTCP := make(chan os.Signal, 10)
+    signal.Notify(signalChanTCP, syscall.SIGINT, syscall.SIGTERM)
+    go func() {
+        s := <-signalChanTCP
+        if i, ok := s.(syscall.Signal); ok {
+            os.Exit(int(i))
+        } else {
+            os.Exit(0)
+        }
+    }()
+
+* server.go (pt.3) - Create gRPC Servive
+
+    //Create the gRPC Service
+    svc := grpc.NewServer(opts...)
+    // Register Service Handlers
+    pb.RegisterChatServer(svc, &ChatHandler{
+        cachedUsers: make(map[string]chan pb.Message),
+    })
+    errChanSVC := make(chan error, 10)
+    go func() {
+        errChanSVC <- svc.Serve(listen)
+    }()
+    signalChan := make(chan os.Signal, 1)
+    signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
+    for {
+        select {
+        case err := <-errChanSVC:
+            if err != nil {
+                log.Fatal(err)
+            }
+        case s := <-signalChan:
+            log.Println(fmt.Sprintf("Captured message %v. Exiting...", s))
+            os.Exit(0)
+        }
+    }
+
+* server.go (pt.4) - Stream Messages
+
+    func (p *ChatHandler) Stream(stream pb.Chat_StreamServer) error {
+    	s, err := stream.Recv() // Open Streamer
+    	if err != nil {
+    		log.Fatalf("Failed to Stream: %v", err)
+        }
+    	// Check whether or not user messages channel allready exists
+    	if _, exists := p.cachedUsers[s.Author.Name]; exists {
+    		return fmt.Errorf("Username allready exists")
+    	}
+    	p.cachedUsers[s.Author.Name] = make(chan pb.Message, 100) // Create User Messages channel
+    	messagesChannel := make(chan pb.Message, 100) 	// Non-Blocking Client Messages Channel
+    	go p.Listen(stream, messagesChannel)
+    	for {
+    		select {
+    		case <-stream.Context().Done():
+    			return stream.Context().Err()
+    		case clientMessage := <-messagesChannel:
+    			go p.Filter(s.Author.Name, clientMessage)
+    		case channelMessage := <-p.cachedUsers[s.Author.Name]:
+    			stream.Send(&channelMessage)
+    		}
+    	}
+    }
+
+* server.go (pt.5) - Filter
+
+    func (p *ChatHandler) Filter(author string, m pb.Message) {
+        //Lock locks m. If the lock is already in use, the calling goroutine
+        // blocks until the mutex is available.
+        p.mu.Lock()
+        // Unlock unlocks m. It is a run-time error if m is not locked
+        // on entry to Unlock.
+        defer p.mu.Unlock()
+
+        for receiver, q := range p.cachedUsers {
+            if author != receiver {
+                q <- m
+            }
+        }
+    }
+* server.go (pt.6) - Listen
+
+    func (p *ChatHandler) Listen(stream pb.Chat_StreamServer, ch chan<- pb.Message) {
+    	for {
+            // repeatedly read in client’s requests
+            req, err := stream.Recv()
+            //  if it’s io.EOF the message stream has ended
+            // and the server can return (close the channel)
+    		if err == io.EOF {
+    			close(ch)
+    			return
+    		}
+    		if err != nil {
+    			return
+    		}
+            // send the message
+    		ch <- *req
+    	}
+    }
+
+* cli.go (pt.1)
+
+    func main() {
+        ...
+        // Connect to Server
+        conn, err := grpc.Dial(*serverAddr, opts...)
+        if err != nil {
+            log.Fatalf("Fail to Dial: %v", err)
+        }
+        defer conn.Close()
+        // Create gRPC Chat Client
+        client := pb.NewChatClient(conn)
+        // Connect to Stream
+        stream, err := client.Stream(context.Background())
+        if err != nil {
+        	log.Fatalf("Stream Connection Failed: %v", err)
+        }
+        ...
+    }
+
+* cli.go (pt.2)
+
+    func main() {
+        ...
+        reader := bufio.NewReader(os.Stdin)
+        if err = stream.Send(&pb.Message{Author: &pb.Author{Name: authorName}}); err != nil {
+            log.Fatal(err)
+        }
+        ...
+    }
+
+* cli.go (pt.3)
+
+    func main() {
+        ...
+        incomingMessages := make(chan pb.Message, 100)
+        go In(stream, incomingMessages)
+        ...
+    }
+    // In Receives Messages from the Streaming Service
+    func In(stream pb.Chat_StreamClient, ch chan pb.Message) {
+    	for {
+    		msg, _ := stream.Recv()
+    		ch <- *msg
+    	}
+    }
+
+
+* cli.go (pt.4)
+
+    func main() {
+        ...
+        outgoingMessages := make(chan pb.Message, 100)
+        go Out(outgoingMessages, reader, authorName)
+        ...
+    }
+    // Out Sends Messages to the Streaming Service
+    func Out(ch chan pb.Message, reader *bufio.Reader, authorName string) {
+    	for {
+    		msg, _ := reader.ReadString('\n')
+    		ch <- pb.Message{
+    			Author: &pb.Author{
+    				Name: authorName,
+    			},
+    			Body: msg,
+    		}
+    	}
+    }
+
+* cli.go (pt.5)
+
+    func main() {
+        ...
+        for {
+            select {
+            case o := <-outgoingMessages:
+                fmt.Printf("%s > ",
+    				authorName,
+    			)
+                stream.Send(&o)
+            case i := <-incomingMessages:
+                fmt.Printf("%s > %s",
+                    i.Author.Name,
+                    i.Body,
+                )
+            }
+        }
+        ...
+    }
+
+* Build
+    # go-chat-server
+    go build -o dist/go-chat-server server/server.go
+    # go-chat
+    go build -o dist/go-chat cli/cli.go
+
+* ex. plagiari.sm
+
+.image assets/plagiarism-example.png

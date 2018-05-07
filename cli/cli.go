@@ -65,7 +65,7 @@ func main() {
 	reader := bufio.NewReader(os.Stdin)
 
 	fmt.Println("\x1b[29;1mWelcome to gRPC Chat CLI!\x1b[0m")
-	fmt.Print("\x1b[30;1mPlease enter your username: \x1b[0m")
+	fmt.Print("\x1b[34;1mPlease enter your username: \x1b[0m")
 
 	authorName, _ := reader.ReadString('\n')
 	truncAName := truncateString(authorName, 12)
@@ -99,9 +99,10 @@ func main() {
 			} else {
 				username = "\x1b[32;1m" + username + "\x1b[0m"
 			}
-			fmt.Printf("%s > %s",
+			fmt.Printf("\n%s > %s\n%s > ",
 				username,
 				i.Body,
+				"\x1b[32;1m"+truncateString(authorName, 12)+"\x1b[0m",
 			)
 		}
 	}

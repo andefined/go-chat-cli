@@ -37,5 +37,3 @@ conf/*.conf
 
 .vscode
 data/*
-
-*.slide
